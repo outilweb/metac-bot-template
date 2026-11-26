@@ -134,6 +134,11 @@ class FallTemplateBot2026(ForecastBot):
 
     ##################################### RESEARCH #####################################
 
+    async def summarize_research(self, question: MetaculusQuestion, research: str) -> str:
+        # No LLM summary (saves one free request per question). This text is
+        # what appears under "Research Summary" in the published comment.
+        return "Not summarized, to save an LLM call. The full news headlines used are in the RESEARCH section below."
+
     async def run_research(self, question: MetaculusQuestion) -> str:
         async with self._concurrency_limiter:
             research = ""
