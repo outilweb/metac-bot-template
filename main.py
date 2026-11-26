@@ -6,6 +6,7 @@ from typing import Literal
 
 import dotenv
 
+import budget
 import fast_parse
 from news_research import gather_news
 
@@ -701,13 +702,57 @@ class FallTemplateBot2026(ForecastBot):
         )
 
 
+# ---------------------------------------------------------------------------
+# Free-tier configuration (no paid credits)
+# ---------------------------------------------------------------------------
+# One free OpenRouter model does every step. Swap FREE_MODEL for a stronger
+# (paid) model if Metaculus-granted credits become available.
+FREE_MODEL = "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+PREDICTIONS_PER_QUESTION = 3  # keep budget.CALLS_PER_QUESTION in sync
+
+# MiniBench is OFF until the bot is good enough: the first MiniBench a bot
+# enters decides Metaculus' performance-based credit grant.
+INCLUDE_MINIBENCH = False
+
+
+def build_free_llms(no_news: bool = False) -> dict:
+    llm = GeneralLlm(model=FREE_MODEL, temperature=0.3, timeout=180, allowed_tries=2)
+    return {
+        "default": llm,
+        "summarizer": llm,  # unused while enable_summarize_research=False
+        # Free Google News headlines (news_research.py).
+        "researcher": llm if no_news else "free-news/google-rss",
+        "parser": llm,  # only used when fast_parse cannot read the answer
+    }
+
+
+def select_questions(
+    tournament_ids: list[int | str], skip_forecasted: bool, limit: int | None
+) -> list[MetaculusQuestion]:
+    """Open questions from the given tournaments, soonest-closing first, capped by the daily budget."""
+    client = MetaculusClient()
+    questions: list[MetaculusQuestion] = []
+    for tid in tournament_ids:
+        questions += client.get_all_open_questions_from_tournament(tid)
+    if skip_forecasted:
+        questions = [q for q in questions if not q.already_forecasted]
+    far_future = datetime.max.replace(tzinfo=timezone.utc)
+    questions.sort(key=lambda q: q.close_time or far_future)
+    if limit is not None and len(questions) > limit:
+        logger.info(
+            f"{len(questions)} question(s) to do, daily budget allows {limit}; the rest wait for a later run"
+        )
+        questions = questions[:limit]
+    return questions
+
+
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
-    parser = argparse.ArgumentParser(description="Run the template forecasting bot")
+    parser = argparse.ArgumentParser(description="Run the forecasting bot")
     parser.add_argument(
         "--mode",
         type=str,
@@ -715,36 +760,34 @@ if __name__ == "__main__":
         default="tournament",
         help="What to forecast on (default: tournament)",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Forecast but never publish anything to Metaculus",
+    )
+    parser.add_argument(
+        "--max-questions",
+        type=int,
+        default=None,
+        help="Forecast at most this many questions (also capped by the daily free budget)",
+    )
     args = parser.parse_args()
     run_mode: Literal["tournament", "metaculus_cup", "test_questions"] = args.mode
 
     check_environment(strict=True)
-    publish_to_metaculus = True
+    publish_to_metaculus = not args.dry_run
     print_startup_banner(run_mode, will_publish=publish_to_metaculus)
 
-    # Configure the bot. The `llms=` block below is commented out to use
-    # whichever default models forecasting-tools picks based on your env vars;
-    # uncomment and edit to pin specific models.
     template_bot = FallTemplateBot2026(
         research_reports_per_question=1,
-        predictions_per_research_report=5,
+        predictions_per_research_report=PREDICTIONS_PER_QUESTION,
         use_research_summary_to_forecast=False,
         enable_summarize_research=False,  # saves 1 LLM call per question
         publish_reports_to_metaculus=publish_to_metaculus,
         folder_to_save_reports_to=None,
         skip_previously_forecasted_questions=True,
         extra_metadata_in_explanation=True,
-        # llms={
-        #     "default": GeneralLlm(
-        #         model="openrouter/openai/gpt-4o",
-        #         temperature=0.3,
-        #         timeout=40,
-        #         allowed_tries=2,
-        #     ),
-        #     "summarizer": "openai/gpt-4o-mini",
-        #     "researcher": "asknews/news-summaries",
-        #     "parser": "openai/gpt-4o-mini",
-        # },
+        llms=build_free_llms(),
     )
 
     # Per-mode tournament URL shown in the summary banner footer. These
@@ -756,43 +799,32 @@ if __name__ == "__main__":
         "test_questions": "https://www.metaculus.com/tournament/bot-testing-area/",
     }
 
-    # Dispatch on mode. Each branch produces a list of ForecastReport (or
-    # exceptions, since return_exceptions=True) which then flows into the
-    # summary printers below.
     client = MetaculusClient()
     if run_mode == "tournament":
-        seasonal_tournament_reports = asyncio.run(
-            template_bot.forecast_on_tournament(
-                client.CURRENT_AI_COMPETITION_ID, return_exceptions=True
-            )
-        )
-        minibench_reports = asyncio.run(
-            template_bot.forecast_on_tournament(
-                client.CURRENT_MINIBENCH_ID, return_exceptions=True
-            )
-        )
-        forecast_reports = seasonal_tournament_reports + minibench_reports
+        tournament_ids: list[int | str] = [client.CURRENT_AI_COMPETITION_ID]
+        if INCLUDE_MINIBENCH:
+            tournament_ids.append(client.CURRENT_MINIBENCH_ID)
+        skip_forecasted = True
     elif run_mode == "metaculus_cup":
         # The Metaculus Cup may be uninitialized near the start of a season
-        # (Jan/May/Sep). MetaculusClient.ACX_2025_TOURNAMENT = 32564 and
-        # MetaculusClient.AI_2027_TOURNAMENT_ID = "ai-2027" are also valid
-        # targets here.
-        template_bot.skip_previously_forecasted_questions = False
-        forecast_reports = asyncio.run(
-            template_bot.forecast_on_tournament(
-                client.CURRENT_METACULUS_CUP_ID, return_exceptions=True
-            )
-        )
-    elif run_mode == "test_questions":
+        # (Jan/May/Sep).
+        tournament_ids = [client.CURRENT_METACULUS_CUP_ID]
+        skip_forecasted = False
+    else:
         # The bot-testing-area tournament contains all question types and is
         # the recommended target for smoke-testing your bot.
-        # https://www.metaculus.com/tournament/bot-testing-area/
-        template_bot.skip_previously_forecasted_questions = False
-        forecast_reports = asyncio.run(
-            template_bot.forecast_on_tournament(
-                "bot-testing-area", return_exceptions=True
-            )
-        )
+        tournament_ids = ["bot-testing-area"]
+        skip_forecasted = False
+    template_bot.skip_previously_forecasted_questions = skip_forecasted
+
+    limit = budget.max_questions_this_run()
+    if args.max_questions is not None:
+        limit = args.max_questions if limit is None else min(limit, args.max_questions)
+
+    questions = select_questions(tournament_ids, skip_forecasted, limit)
+    forecast_reports = asyncio.run(
+        template_bot.forecast_questions(questions, return_exceptions=True)
+    )
 
     template_bot.log_report_summary(forecast_reports)
     print_run_summary_banner(

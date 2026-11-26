@@ -16,31 +16,22 @@ import asyncio
 import logging
 
 from bot_helpers import check_environment
-from main import FallTemplateBot2026
-from forecasting_tools import GeneralLlm, MetaculusClient
-
-FREE_MODEL = "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
+from main import FREE_MODEL, FallTemplateBot2026, build_free_llms
+from forecasting_tools import MetaculusClient
 
 
 def build_bot(predictions: int, no_news: bool = False) -> FallTemplateBot2026:
-    llm = GeneralLlm(model=FREE_MODEL, temperature=0.3, timeout=180, allowed_tries=2)
+    # Same models as the real bot (main.py), but never publishes.
     return FallTemplateBot2026(
         research_reports_per_question=1,
         predictions_per_research_report=predictions,
         use_research_summary_to_forecast=False,
-        enable_summarize_research=False,  # saves 1 LLM call per question
+        enable_summarize_research=False,
         publish_reports_to_metaculus=False,  # never publish from a dry run
         folder_to_save_reports_to="dry_run_reports",
         skip_previously_forecasted_questions=False,
         extra_metadata_in_explanation=True,
-        llms={
-            "default": llm,
-            "summarizer": llm,
-            # Free Google News headlines (news_research.py); --no-news falls
-            # back to the LLM writing "research" from its own knowledge.
-            "researcher": llm if no_news else "free-news/google-rss",
-            "parser": llm,
-        },
+        llms=build_free_llms(no_news=no_news),
     )
 
 
@@ -58,7 +49,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument("--n", type=int, default=2, help="number of questions")
-    parser.add_argument("--predictions", type=int, default=2)
+    parser.add_argument("--predictions", type=int, default=3)
     parser.add_argument("--no-news", action="store_true", help="skip the free news search")
     args = parser.parse_args()
 

@@ -2,8 +2,11 @@ name: Forecast on Metaculus Cup
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 0 */2 * *" # runs at midnight every 2 days
+  # Schedule disabled: the Metaculus Cup has no bot prize, and re-forecasting
+  # all of its questions would use up the OpenRouter free daily budget that
+  # the prize tournaments need. Run it by hand from the Actions tab if wanted.
+  # schedule:
+  #   - cron: "0 0 */2 * *" # runs at midnight every 2 days
 
 # Add concurrency group to prevent parallel runs
 concurrency:
