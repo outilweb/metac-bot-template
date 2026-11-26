@@ -6,6 +6,9 @@ from typing import Literal
 
 import dotenv
 
+import fast_parse
+from news_research import gather_news
+
 # Runtime helpers (env validation, banners, dependency-warning suppression).
 from bot_helpers import (
     check_environment,
@@ -124,7 +127,9 @@ class FallTemplateBot2026(ForecastBot):
         1  # Set this to whatever works for your search-provider/ai-model rate limits
     )
     _concurrency_limiter = asyncio.Semaphore(_max_concurrent_questions)
-    _structure_output_validation_samples = 2
+    # Only used when fast_parse cannot read the answer (rare): 1 sample keeps
+    # the free daily request budget for actual forecasting.
+    _structure_output_validation_samples = 1
 
     ##################################### RESEARCH #####################################
 
@@ -135,7 +140,11 @@ class FallTemplateBot2026(ForecastBot):
 
             prompt = self._get_research_prompt(question, researcher)
 
-            if isinstance(researcher, GeneralLlm):
+            if researcher == "free-news/google-rss":
+                # Free Google News headlines (see news_research.py). Uses the
+                # "default" LLM once to write search queries.
+                research = await gather_news(question, self.get_llm("default", "llm"))
+            elif isinstance(researcher, GeneralLlm):
                 research = await researcher.invoke(prompt)
             elif (
                 researcher == "asknews/news-summaries"
@@ -243,14 +252,17 @@ class FallTemplateBot2026(ForecastBot):
             {self._create_resolved_question_parsing_message()}
             """
         )
-        binary_prediction: BinaryPrediction = await structure_output(
-            reasoning,
-            BinaryPrediction,
-            model=self.get_llm("parser", "llm"),
-            num_validation_samples=self._structure_output_validation_samples,
-            additional_instructions=parsing_instructions,
-        )
-        decimal_pred = max(0.01, min(0.99, binary_prediction.prediction_in_decimal))
+        decimal_pred = fast_parse.binary(reasoning)
+        if decimal_pred is None:
+            binary_prediction: BinaryPrediction = await structure_output(
+                reasoning,
+                BinaryPrediction,
+                model=self.get_llm("parser", "llm"),
+                num_validation_samples=self._structure_output_validation_samples,
+                additional_instructions=parsing_instructions,
+            )
+            decimal_pred = binary_prediction.prediction_in_decimal
+        decimal_pred = max(0.01, min(0.99, decimal_pred))
 
         logger.info(
             f"Forecasted URL {question.page_url} with prediction: {decimal_pred}."
@@ -319,13 +331,15 @@ class FallTemplateBot2026(ForecastBot):
         )
         reasoning = await self.get_llm("default", "llm").invoke(prompt)
         logger.info(f"Reasoning for URL {question.page_url}: {reasoning}")
-        predicted_option_list: PredictedOptionList = await structure_output(
-            text_to_structure=reasoning,
-            output_type=PredictedOptionList,
-            model=self.get_llm("parser", "llm"),
-            num_validation_samples=self._structure_output_validation_samples,
-            additional_instructions=parsing_instructions,
-        )
+        predicted_option_list = fast_parse.multiple_choice(reasoning, question.options)
+        if predicted_option_list is None:
+            predicted_option_list = await structure_output(
+                text_to_structure=reasoning,
+                output_type=PredictedOptionList,
+                model=self.get_llm("parser", "llm"),
+                num_validation_samples=self._structure_output_validation_samples,
+                additional_instructions=parsing_instructions,
+            )
 
         logger.info(
             f"Forecasted URL {question.page_url} with prediction: {predicted_option_list}."
@@ -417,13 +431,15 @@ class FallTemplateBot2026(ForecastBot):
             - Turn any values that are in scientific notation into regular numbers.
             """
         )
-        percentile_list: list[Percentile] = await structure_output(
-            reasoning,
-            list[Percentile],
-            model=self.get_llm("parser", "llm"),
-            additional_instructions=parsing_instructions,
-            num_validation_samples=self._structure_output_validation_samples,
-        )
+        percentile_list = fast_parse.numeric(reasoning)
+        if percentile_list is None:
+            percentile_list = await structure_output(
+                reasoning,
+                list[Percentile],
+                model=self.get_llm("parser", "llm"),
+                additional_instructions=parsing_instructions,
+                num_validation_samples=self._structure_output_validation_samples,
+            )
         prediction = NumericDistribution.from_question(percentile_list, question)
         logger.info(
             f"Forecasted URL {question.page_url} with prediction: {prediction.declared_percentiles}."
@@ -509,13 +525,15 @@ class FallTemplateBot2026(ForecastBot):
             - If percentiles are not explicitly given (e.g. only a single value is given) please don't return a parsed output, but rather indicate that the answer is not explicitly given in the text.
             """
         )
-        date_percentile_list: list[DatePercentile] = await structure_output(
-            reasoning,
-            list[DatePercentile],
-            model=self.get_llm("parser", "llm"),
-            additional_instructions=parsing_instructions,
-            num_validation_samples=self._structure_output_validation_samples,
-        )
+        date_percentile_list = fast_parse.date(reasoning)
+        if date_percentile_list is None:
+            date_percentile_list = await structure_output(
+                reasoning,
+                list[DatePercentile],
+                model=self.get_llm("parser", "llm"),
+                additional_instructions=parsing_instructions,
+                num_validation_samples=self._structure_output_validation_samples,
+            )
 
         percentile_list = [
             Percentile(
@@ -711,6 +729,7 @@ if __name__ == "__main__":
         research_reports_per_question=1,
         predictions_per_research_report=5,
         use_research_summary_to_forecast=False,
+        enable_summarize_research=False,  # saves 1 LLM call per question
         publish_reports_to_metaculus=publish_to_metaculus,
         folder_to_save_reports_to=None,
         skip_previously_forecasted_questions=True,
