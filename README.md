@@ -91,7 +91,7 @@ The schedules are set in `.github/workflows/`:
 
 | Workflow | What it does | Schedule |
 |---|---|---|
-| `run_bot_on_tournament.yaml` | Forecasts new questions of the current seasonal FutureEval tournament | every 20 minutes |
+| `run_bot_on_tournament.yaml` | Forecasts new questions of the current seasonal FutureEval tournament, plus the human+bot tournaments where bots can win prizes (`EXTRA_BOT_TOURNAMENTS` in `main.py`: Market Pulse, Animal Futures) | every 20 minutes |
 | `test_bot.yaml` | Forecasts the [bot-testing-area](https://www.metaculus.com/tournament/bot-testing-area/) | manual only |
 | `run_bot_on_metaculus_cup.yaml` | Metaculus Cup (practice, no bot prize) | manual only (schedule disabled to save the daily budget) |
 | `review_bot.yaml` | Scores resolved forecasts, read-only | manual, or weekly if enabled |

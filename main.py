@@ -719,6 +719,15 @@ PREDICTIONS_PER_QUESTION = 3  # keep budget.CALLS_PER_QUESTION in sync
 # enters decides Metaculus' performance-based credit grant.
 INCLUDE_MINIBENCH = False
 
+# Human+bot tournaments whose prizes bots may win (bot_leaderboard_status
+# "include" in the Metaculus API, checked 2026-11-27). Rule for both: a person
+# enters ONCE, either as a bot or as a human - here it is the bot.
+# Market Pulse changes slug every quarter (26q4 -> 27q1 ...): update it then.
+EXTRA_BOT_TOURNAMENTS: list[int | str] = [
+    "market-pulse-26q4",  # Market Pulse Challenge 26Q4, $7,500, financial questions
+    33016,  # Animal Futures Tournament, $3,400
+]
+
 
 def build_free_llms(no_news: bool = False) -> dict:
     llm = GeneralLlm(model=FREE_MODEL, temperature=0.3, timeout=180, allowed_tries=2)
@@ -809,6 +818,7 @@ if __name__ == "__main__":
         tournament_ids: list[int | str] = [client.CURRENT_AI_COMPETITION_ID]
         if INCLUDE_MINIBENCH:
             tournament_ids.append(client.CURRENT_MINIBENCH_ID)
+        tournament_ids += EXTRA_BOT_TOURNAMENTS
         skip_forecasted = True
     elif run_mode == "metaculus_cup":
         # The Metaculus Cup may be uninitialized near the start of a season
