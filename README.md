@@ -79,7 +79,9 @@ An OpenRouter free-tier key allows **50 free-model requests per day**. The bot i
 - **Daily budget guard (`budget.py`):**
   - before every run, the bot asks OpenRouter how many free requests are left today;
   - it then takes only as many new questions as fit, counting 5 calls per question and keeping 2 in reserve;
-  - questions that close soonest go first, and the others wait for a later run;
+  - questions that close within 6 hours go first (FutureEval questions can only be forecast for 3 hours);
+  - long-horizon questions (closing in months) only use the requests not needed by the FutureEval 3-hour slots still to come before the daily reset at 00:00 UTC, so they mostly run in the evening;
+  - the others wait for a later run;
   - so the bot never runs out of requests in the middle of a question.
 - If the key is not on the free tier, the guard does not limit anything.
 
@@ -91,10 +93,12 @@ The schedules are set in `.github/workflows/`:
 
 | Workflow | What it does | Schedule |
 |---|---|---|
-| `run_bot_on_tournament.yaml` | Forecasts new questions of **every ongoing Metaculus tournament with a prize pool where bots can win prizes**, found automatically at each run (`tournaments.py`: API fields `prize_pool` and `bot_leaderboard_status` = `bots_only` or `include`). On 2026-11-27: Fall 2026 FutureEval, Market Pulse 26Q4, Animal Futures. New seasons and quarters are picked up without code changes | every 20 minutes |
+| `run_bot_on_tournament.yaml` | Forecasts new questions of **every ongoing Metaculus tournament with a prize pool where bots can win prizes**, found automatically at each run (`tournaments.py`: API fields `prize_pool` and `bot_leaderboard_status` = `bots_only` or `include`). On 2026-11-27: Fall 2026 FutureEval, Market Pulse 26Q4, Animal Futures. New seasons and quarters are picked up without code changes | about every 25 minutes: each run starts the next one after a 20-minute pause (see below) |
 | `test_bot.yaml` | Forecasts the [bot-testing-area](https://www.metaculus.com/tournament/bot-testing-area/) | manual only |
 | `run_bot_on_metaculus_cup.yaml` | Metaculus Cup (practice, no bot prize) | manual only (schedule disabled to save the daily budget) |
 | `review_bot.yaml` | Scores resolved forecasts, read-only | manual, or weekly if enabled |
+
+**How the tournament workflow keeps running.** GitHub's cron trigger never fired on this repository, and it is known to be unreliable. So each run ends with a `next_run` job that waits 20 minutes in the `pause-before-next-run` environment, then starts the next run. The environment has a wait timer, so no runner is used while waiting. The cron stays as a backup. The concurrency group allows only one waiting run, so there is never more than one chain. To stop the bot, cancel the waiting run or disable the workflow.
 
 **MiniBench** is off by default (`INCLUDE_MINIBENCH = False` in `main.py`). It will be switched on once the bot is considered ready.
 

@@ -742,9 +742,9 @@ def build_free_llms(no_news: bool = False) -> dict:
 
 
 def select_questions(
-    tournament_ids: list[int | str], skip_forecasted: bool, limit: int | None
+    tournament_ids: list[int | str], skip_forecasted: bool
 ) -> list[MetaculusQuestion]:
-    """Open questions from the given tournaments, soonest-closing first, capped by the daily budget."""
+    """Open questions from the given tournaments, soonest-closing first."""
     client = MetaculusClient()
     questions: list[MetaculusQuestion] = []
     seen: set = set()
@@ -763,11 +763,6 @@ def select_questions(
         questions = [q for q in questions if not q.already_forecasted]
     far_future = datetime.max.replace(tzinfo=timezone.utc)
     questions.sort(key=lambda q: q.close_time or far_future)
-    if limit is not None and len(questions) > limit:
-        logger.info(
-            f"{len(questions)} question(s) to do, daily budget allows {limit}; the rest wait for a later run"
-        )
-        questions = questions[:limit]
     return questions
 
 
@@ -846,11 +841,17 @@ if __name__ == "__main__":
         skip_forecasted = False
     template_bot.skip_previously_forecasted_questions = skip_forecasted
 
-    limit = budget.max_questions_this_run()
+    questions = select_questions(tournament_ids, skip_forecasted)
+    logger.info(f"{len(questions)} open question(s) to forecast")
+    # Fit the daily free budget. In tournament mode, requests are kept for the
+    # 3-hour FutureEval questions still to come today (see budget.py).
+    questions = budget.pick_within_budget(
+        questions,
+        budget.free_requests_remaining(),
+        reserve_for_short_questions=(run_mode == "tournament"),
+    )
     if args.max_questions is not None:
-        limit = args.max_questions if limit is None else min(limit, args.max_questions)
-
-    questions = select_questions(tournament_ids, skip_forecasted, limit)
+        questions = questions[: args.max_questions]
     forecast_reports = asyncio.run(
         template_bot.forecast_questions(questions, return_exceptions=True)
     )

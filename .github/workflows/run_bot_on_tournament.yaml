@@ -1,20 +1,35 @@
 name: Forecast on new AI tournament questions
 
+# How this workflow keeps running on its own:
+#   1. forecast_job forecasts the new questions (already-forecasted questions
+#      are skipped, budget.py caps the number of questions per day).
+#   2. next_run waits 20 minutes in the "pause-before-next-run" environment
+#      (a wait timer: no runner is used while waiting), then starts the next
+#      run of this workflow. Each run starts exactly one next run.
+# GitHub's cron trigger is unreliable (it never fired on this repository), so
+# the chain above is the main trigger. The cron stays as a backup: if it fires
+# while a run is going, the concurrency group lets only one run wait, so there
+# is never more than one chain.
+# To stop the bot: cancel the run that is waiting, or disable this workflow.
+
 on:
   workflow_dispatch:
   schedule:
-    - cron: "3,23,43 * * * *" # every 20 min, offset off the hour. Already-forecasted questions are skipped and budget.py caps the number of new questions per day.
+    - cron: "3,23,43 * * * *"
 
-# Add concurrency group to prevent parallel runs
+permissions:
+  contents: read
+  actions: write # lets next_run start the next run of this workflow
+
+# One run at a time. A newly queued run replaces any run already waiting.
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
-
-# Daily job to run the simple forecast bot
 jobs:
   forecast_job:
     runs-on: ubuntu-latest # determines the machine that will run the job - keep as is
+    timeout-minutes: 90
     steps: # sets up the steps that will be run in order
       # setup repository with all necessary dependencies - keep as is
       - name: Check out repository
@@ -42,3 +57,28 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ASKNEWS_CLIENT_ID: ${{ secrets.ASKNEWS_CLIENT_ID }}
           ASKNEWS_SECRET: ${{ secrets.ASKNEWS_SECRET }}
+
+  next_run:
+    needs: forecast_job
+    # Runs even if forecasting failed (so one bad run does not stop the bot),
+    # but not when a run is cancelled by hand.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: pause-before-next-run # has a 20-minute wait timer
+      deployment: false # do not record a GitHub deployment for each pause
+    steps:
+      - name: Start the next run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3; do
+            if gh workflow run run_bot_on_tournament.yaml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}"; then
+              echo "Next run started."
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "Could not start the next run." >&2
+          exit 1
