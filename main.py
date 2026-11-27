@@ -9,6 +9,7 @@ import dotenv
 import budget
 import fast_parse
 from news_research import gather_news
+from tournaments import discover_bot_prize_tournaments
 
 # Runtime helpers (env validation, banners, dependency-warning suppression).
 from bot_helpers import (
@@ -719,11 +720,11 @@ PREDICTIONS_PER_QUESTION = 3  # keep budget.CALLS_PER_QUESTION in sync
 # enters decides Metaculus' performance-based credit grant.
 INCLUDE_MINIBENCH = False
 
-# Human+bot tournaments whose prizes bots may win (bot_leaderboard_status
-# "include" in the Metaculus API, checked 2026-11-27). Rule for both: a person
-# enters ONCE, either as a bot or as a human - here it is the bot.
-# Market Pulse changes slug every quarter (26q4 -> 27q1 ...): update it then.
-EXTRA_BOT_TOURNAMENTS: list[int | str] = [
+# Tournaments are found automatically at each run (tournaments.py): every
+# ongoing tournament with a prize pool where bots can win prizes. This fixed
+# list is only used if the Metaculus API cannot be reached. For the mixed
+# human+bot ones, a person enters ONCE (bot or human): here it is the bot.
+FALLBACK_BOT_TOURNAMENTS: list[int | str] = [
     "market-pulse-26q4",  # Market Pulse Challenge 26Q4, $7,500, financial questions
     33016,  # Animal Futures Tournament, $3,400
 ]
@@ -746,8 +747,18 @@ def select_questions(
     """Open questions from the given tournaments, soonest-closing first, capped by the daily budget."""
     client = MetaculusClient()
     questions: list[MetaculusQuestion] = []
+    seen: set = set()
     for tid in tournament_ids:
-        questions += client.get_all_open_questions_from_tournament(tid)
+        try:
+            batch = client.get_all_open_questions_from_tournament(tid)
+        except Exception as e:  # one unreachable tournament must not stop the others
+            logger.warning(f"Could not load tournament {tid}: {e}")
+            continue
+        for q in batch:
+            key = q.id_of_question or q.page_url
+            if key not in seen:  # a question can be listed in two tournaments
+                seen.add(key)
+                questions.append(q)
     if skip_forecasted:
         questions = [q for q in questions if not q.already_forecasted]
     far_future = datetime.max.replace(tzinfo=timezone.utc)
@@ -815,10 +826,13 @@ if __name__ == "__main__":
 
     client = MetaculusClient()
     if run_mode == "tournament":
-        tournament_ids: list[int | str] = [client.CURRENT_AI_COMPETITION_ID]
+        discovered = discover_bot_prize_tournaments(include_minibench=INCLUDE_MINIBENCH)
+        if discovered:
+            tournament_ids: list[int | str] = list(discovered)
+        else:
+            tournament_ids = [client.CURRENT_AI_COMPETITION_ID, *FALLBACK_BOT_TOURNAMENTS]
         if INCLUDE_MINIBENCH:
             tournament_ids.append(client.CURRENT_MINIBENCH_ID)
-        tournament_ids += EXTRA_BOT_TOURNAMENTS
         skip_forecasted = True
     elif run_mode == "metaculus_cup":
         # The Metaculus Cup may be uninitialized near the start of a season

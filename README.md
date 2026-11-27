@@ -91,7 +91,7 @@ The schedules are set in `.github/workflows/`:
 
 | Workflow | What it does | Schedule |
 |---|---|---|
-| `run_bot_on_tournament.yaml` | Forecasts new questions of the current seasonal FutureEval tournament, plus the human+bot tournaments where bots can win prizes (`EXTRA_BOT_TOURNAMENTS` in `main.py`: Market Pulse, Animal Futures) | every 20 minutes |
+| `run_bot_on_tournament.yaml` | Forecasts new questions of **every ongoing Metaculus tournament with a prize pool where bots can win prizes**, found automatically at each run (`tournaments.py`: API fields `prize_pool` and `bot_leaderboard_status` = `bots_only` or `include`). On 2026-11-27: Fall 2026 FutureEval, Market Pulse 26Q4, Animal Futures. New seasons and quarters are picked up without code changes | every 20 minutes |
 | `test_bot.yaml` | Forecasts the [bot-testing-area](https://www.metaculus.com/tournament/bot-testing-area/) | manual only |
 | `run_bot_on_metaculus_cup.yaml` | Metaculus Cup (practice, no bot prize) | manual only (schedule disabled to save the daily budget) |
 | `review_bot.yaml` | Scores resolved forecasts, read-only | manual, or weekly if enabled |
@@ -144,6 +144,7 @@ cp .env.template .env   # then put your METACULUS_TOKEN and OPENROUTER_API_KEY i
 | `news_research.py` | Free Google News headline research |
 | `fast_parse.py` | Reads the model's final answer without an extra LLM call |
 | `budget.py` | Daily OpenRouter free-tier budget guard |
+| `tournaments.py` | Finds every ongoing prize tournament open to bots, at each run |
 | `dry_run.py` | Test script that never publishes |
 | `bot_helpers.py` | Environment checks and console banners (from the template) |
 | `main_with_no_framework.py`, `integrations/` | Unchanged template files, not used by this bot |
