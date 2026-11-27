@@ -3,7 +3,7 @@ name: Forecast on new AI tournament questions
 on:
   workflow_dispatch:
   schedule:
-    - cron: "7,27,47 * * * *" # every 20 min, offset off the hour. Already-forecasted questions are skipped and budget.py caps the number of new questions per day.
+    - cron: "3,23,43 * * * *" # every 20 min, offset off the hour. Already-forecasted questions are skipped and budget.py caps the number of new questions per day.
 
 # Add concurrency group to prevent parallel runs
 concurrency:
